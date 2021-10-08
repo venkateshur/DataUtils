@@ -37,6 +37,8 @@ object DataValidation extends App {
       val queryResult = tableMeta.query.fold[DataFrame](spark.emptyDataFrame)(query => getResult(inputTable, query))
         .persist(StorageLevel.MEMORY_AND_DISK)
 
+      val recordsCount = inputTable.count()
+
       inputTable.unpersist()
 
       val (columnsCount, schema) = if (tableMeta.schemaValidation) getSchema(inputTable) else (0, "")
@@ -49,7 +51,7 @@ object DataValidation extends App {
 
       if (queryResult.take(1).nonEmpty) writeCSVFile(queryResult, queryResultsPath)
 
-      val tableSummary = TableSummary(tableMeta.tableName, inputTable.count(), columnsCount, schema)
+      val tableSummary = TableSummary(tableMeta.tableName, recordsCount, columnsCount, schema)
 
       statsResult.unpersist()
       queryResult.unpersist()
