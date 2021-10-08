@@ -20,7 +20,7 @@ object Common {
   }
 
   def writeCSVFile(inputDf: DataFrame, outputPath: String): Unit = {
-    inputDf.write.option("header", "true").format("csv").mode("overwrite")
+    inputDf.coalesce(1).write.option("header", "true").format("csv").mode("overwrite")
       .save(outputPath)
   }
 

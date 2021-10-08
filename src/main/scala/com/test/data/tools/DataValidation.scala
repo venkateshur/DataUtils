@@ -13,7 +13,7 @@ import scala.util.{Failure, Success, Try}
 
 
 case class TableMeta(tableName: String, statusColumns: Seq[String], query: Option[String], schemaValidation: Boolean)
-case class TableSummary(tableName: String, count: Long, schema: String)
+case class TableSummary(tableName: String, count: Long, columnsCount: Int, schema: String)
 
 object DataValidation extends App {
 
@@ -27,19 +27,32 @@ object DataValidation extends App {
     val config = loadConfig()
     val tables = buildTables(config)
     val outputBasePath = s"${config.getString("output-path")}/processed_time=$currentTimestamp"
+
     val tablesMetaData = tables.map{tableMeta => {
+
       val inputTable = Common.readTable(tableMeta.tableName).persist(StorageLevel.MEMORY_AND_DISK)
-      val statsResult = getStats(inputTable, tableMeta.statusColumns)
-      val queryResult = tableMeta.query.fold[Option[DataFrame]](None)(query => Some(getResult(inputTable, query)))
-      val schema = if (tableMeta.schemaValidation) getSchema(inputTable) else ""
+
+      val statsResult = getStats(inputTable, tableMeta.statusColumns).persist(StorageLevel.MEMORY_AND_DISK)
+
+      val queryResult = tableMeta.query.fold[DataFrame](spark.emptyDataFrame)(query => getResult(inputTable, query))
+        .persist(StorageLevel.MEMORY_AND_DISK)
+
+      inputTable.unpersist()
+
+      val (columnsCount, schema) = if (tableMeta.schemaValidation) getSchema(inputTable) else (0, "")
 
       val tableOutputBasePath = s"$outputBasePath/${tableMeta.tableName}"
       val outputStatsPath = s"$tableOutputBasePath/stats"
       val queryResultsPath = s"$tableOutputBasePath/query_results"
+
       writeCSVFile(statsResult, outputStatsPath)
-      queryResult.fold[Unit](Unit)(resultDf => writeCSVFile(resultDf, queryResultsPath))
-      val tableSummary = TableSummary(tableMeta.tableName, inputTable.count(), schema)
-      inputTable.unpersist()
+
+      if (queryResult.take(1).nonEmpty) writeCSVFile(queryResult, queryResultsPath)
+
+      val tableSummary = TableSummary(tableMeta.tableName, inputTable.count(), columnsCount, schema)
+
+      statsResult.unpersist()
+      queryResult.unpersist()
       tableSummary
     }}
       import spark.implicits._
@@ -48,16 +61,16 @@ object DataValidation extends App {
 
   } match {
     case Success(_) =>
-      logger.info("Data Comparison Execution Successful")
+      logger.info("Data Validation Execution Successful")
       spark.stop()
     case Failure(exception) =>
       spark.stop()
-      logger.error("Data Comparison Execution with error: " + exception.getLocalizedMessage)
+      logger.error("Data Validation Execution with error: " + exception.getLocalizedMessage)
       throw exception
   }
 
   private def getSchema(source: DataFrame)= {
-    source.schema.treeString
+    (source.columns.length, source.schema.treeString)
   }
 
   private def getStats(source: DataFrame, columns: Seq[String] = Seq())= {
