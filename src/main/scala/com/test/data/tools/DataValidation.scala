@@ -1,5 +1,6 @@
 package com.test.data.tools
 
+
 import com.test.data.tools.utils.Common
 import com.test.data.tools.utils.Common.{loadConfig, writeCSVFile}
 import com.typesafe.config.Config
@@ -13,7 +14,7 @@ import scala.util.{Failure, Success, Try}
 
 
 case class TableMeta(tableName: String, statusColumns: Seq[String], query: Option[String], schemaValidation: Boolean)
-case class TableSummary(tableName: String, count: Long, columnsCount: Int, schema: String)
+case class TableSummary(tableName: String, count: Long, schema: String)
 
 object DataValidation extends App {
 
@@ -26,53 +27,42 @@ object DataValidation extends App {
   Try {
     val config = loadConfig()
     val tables = buildTables(config)
-    val outputBasePath = s"${config.getString("output-path")}/processed_time=$currentTimestamp"
-
+    val outputBasePath = s"${config.getString("output-path")}/processed_time=$currentTimestamp/"
     val tablesMetaData = tables.map{tableMeta => {
+      //This is just for testing
+      //val inputTable = spark.read.option("header", "true").option("delimiter", ";").csv("src/main/resources/in/username.csv")
+      //  .persist(StorageLevel.MEMORY_AND_DISK)
 
       val inputTable = Common.readTable(tableMeta.tableName).persist(StorageLevel.MEMORY_AND_DISK)
-
-      val statsResult = getStats(inputTable, tableMeta.statusColumns).persist(StorageLevel.MEMORY_AND_DISK)
-
-      val queryResult = tableMeta.query.fold[DataFrame](spark.emptyDataFrame)(query => getResult(inputTable, query))
-        .persist(StorageLevel.MEMORY_AND_DISK)
-
-      val recordsCount = inputTable.count()
-
-      inputTable.unpersist()
-
-      val (columnsCount, schema) = if (tableMeta.schemaValidation) getSchema(inputTable) else (0, "")
+      val statsResult = getStats(inputTable, tableMeta.statusColumns)
+      val queryResult = tableMeta.query.fold[Option[DataFrame]](None)(query => Some(getResult(inputTable, query)))
+      val schema = if (tableMeta.schemaValidation) getSchema(inputTable) else ""
 
       val tableOutputBasePath = s"$outputBasePath/${tableMeta.tableName}"
       val outputStatsPath = s"$tableOutputBasePath/stats"
       val queryResultsPath = s"$tableOutputBasePath/query_results"
-
       writeCSVFile(statsResult, outputStatsPath)
-
-      if (queryResult.take(1).nonEmpty) writeCSVFile(queryResult, queryResultsPath)
-
-      val tableSummary = TableSummary(tableMeta.tableName, recordsCount, columnsCount, schema)
-
-      statsResult.unpersist()
-      queryResult.unpersist()
+      queryResult.fold[Unit](Unit)(resultDf => writeCSVFile(resultDf, queryResultsPath))
+      val tableSummary = TableSummary(tableMeta.tableName, inputTable.count(), schema)
+      inputTable.unpersist()
       tableSummary
     }}
-      import spark.implicits._
-      val processedTablesMetaDf = tablesMetaData.toDF()
-      writeCSVFile(processedTablesMetaDf, s"$outputBasePath/tables-meta")
+    import spark.implicits._
+    val processedTablesMetaDf = tablesMetaData.toDF()
+    writeCSVFile(processedTablesMetaDf, s"$outputBasePath/tables-meta")
 
   } match {
     case Success(_) =>
-      logger.info("Data Validation Execution Successful")
+      logger.info("Data Comparison Execution Successful")
       spark.stop()
     case Failure(exception) =>
       spark.stop()
-      logger.error("Data Validation Execution with error: " + exception.getLocalizedMessage)
+      logger.error("Data Comparison Execution with error: " + exception.getLocalizedMessage)
       throw exception
   }
 
   private def getSchema(source: DataFrame)= {
-    (source.columns.length, source.schema.treeString)
+    source.schema.simpleString
   }
 
   private def getStats(source: DataFrame, columns: Seq[String] = Seq())= {
@@ -88,7 +78,7 @@ object DataValidation extends App {
     import collection.JavaConverters._
 
     config.getConfigList("tables").asScala.toList.map(conf => {
-      val tableName = conf.getString("names")
+      val tableName = conf.getString("name")
       val statsColumns = if (conf.hasPath("stats-columns"))
         conf.getString("stats-columns").split(";").toSeq
       else Seq()

@@ -1,0 +1,3 @@
+tableName,count,schema
+table1,5,"struct<Username:string,Identifier:string,First_name:string,Last_name:string>"
+table2,5,""
