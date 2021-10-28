@@ -25,7 +25,7 @@ object DataTransferApp extends App {
   val currentTimestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"))
 
   Try {
-    val config = loadConfig()
+    val config = loadConfig("data-transfer")
     val tables = buildTables(config)
     val outputBasePath = s"${config.getString("output-path")}/processed_time=$currentTimestamp/"
     val tablesMetaData = tables.map{tableMeta => {
