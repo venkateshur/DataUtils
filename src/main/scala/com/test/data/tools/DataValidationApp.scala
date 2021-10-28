@@ -1,22 +1,19 @@
 package com.test.data.tools
 
 import com.test.data.tools.utils.Common
-import com.test.data.tools.utils.Common.{loadConfig, writeCSVFile}
-import com.typesafe.config.Config
+import org.apache.spark.sql.functions._
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.storage.StorageLevel
 import org.slf4j.LoggerFactory
 
-import org.apache.spark.sql.functions._
-
-import java.time.format.DateTimeFormatter
 import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 import scala.util.{Failure, Success, Try}
 
 
-case class TableData(tableName: String, count: Long, schema: String, query: String)
-case class TableResult(tableName: String, sourceCount: Long, targetCount: Long, countMatched: String, dataMatched: String,
-                       differencePath: String)
+case class TableData(tableName: String, count: Long, query: String, schema: String)
+case class TableResult(tableName: String, sourceCount: Long, targetCount: Long, countMatched: String,
+                       dataMatched: String, schemaMatched: String, differencePath: String)
 
 object DataValidation extends App {
 
@@ -41,15 +38,16 @@ object DataValidation extends App {
       targetTableDf.createOrReplaceTempView(s"${tableData.tableName}_temp")
       val targetTableResultDf = spark.sql(tableData.query.stripMargin.replace(tableData.tableName, tableData.tableName + "_temp"))
 
-      val sourceToTargetDifference = sourceTableResultDf.except(targetTableResultDf).persist(StorageLevel.MEMORY_AND_DISK)
+      val sourceToTargetDifference = castToString(sourceTableResultDf).except(castToString(targetTableResultDf)).persist(StorageLevel.MEMORY_AND_DISK)
 
       val targetTableCount = targetTableDf.count()
+      val schemaMatches = if(tableData.schema.equalsIgnoreCase(targetTableDf.schema.simpleString)) "MATCHED" else "NOT MATCHED"
       val countMatches = if (tableData.count == targetTableDf.count()) "MATCHED" else "NOT MATCHED"
       val dataMatches = if (sourceToTargetDifference.take(1).isEmpty) "MATCHED" else "NOT MATCHED"
       val differencePath = if (dataMatches == "MATCHED") "" else outputPath
       Map(sourceToTargetDifference.withColumn("table_name", lit(tableData.tableName)) ->
         TableResult(tableData.tableName, tableData.count, targetTableCount, countMatches, dataMatches,
-        differencePath + "/table_name=" + tableData.tableName))
+        differencePath + "/table_name=" + tableData.tableName, schemaMatches))
 
     }).reduceLeft(_ ++ _)
     val resultsDf = results.values.toSeq.toDS()
@@ -66,6 +64,11 @@ object DataValidation extends App {
       spark.stop()
       logger.error("Data Validation Application Execution with error: " + exception.getLocalizedMessage)
       throw exception
+  }
+
+  private def castToString(df: DataFrame) = {
+    val columns = df.columns
+    columns.foldLeft(df)((df, columnName) => df.withColumn(columnName, col(columnName).cast("string")) )
   }
 }
 
