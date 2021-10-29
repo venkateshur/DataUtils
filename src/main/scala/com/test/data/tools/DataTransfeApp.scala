@@ -22,7 +22,9 @@ object DataTransferApp extends App {
 
   implicit val spark: SparkSession = Common.initSparkSession("Data Transfer")
 
-  val currentTimestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"))
+  val currentTimestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss")
+
+  val numOfPartitions = args(0)
 
   Try {
     val config = loadConfig("data-transfer")
@@ -30,8 +32,8 @@ object DataTransferApp extends App {
     val outputBasePath = s"${config.getString("output-path")}/processed_time=$currentTimestamp/"
     val tablesMetaData = tables.map{tableMeta => {
       val inputTable = Common.readTable(tableMeta.tableName).persist(StorageLevel.MEMORY_AND_DISK)
-      inputTable.createOrReplaceTempView(tableMeta.tableName + "_temp")
-      val queryResult = spark.sql(tableMeta.query.replaceAll(tableMeta.tableName, tableMeta.tableName + "_temp"))
+      inputTable.createOrReplaceTempView("source" + "_temp")
+      val queryResult = spark.sql(tableMeta.query.replaceAll(tableMeta.tableName, "source" + "_temp"))
       val schema = getSchema(inputTable)
       val tableCount = inputTable.count()
       val tableSummary = TableSummary(tableMeta.tableName, tableCount, tableMeta.query, schema)

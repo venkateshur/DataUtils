@@ -1,6 +1,7 @@
 package com.test.data.tools
 
 import com.test.data.tools.utils.Common
+import com.test.data.tools.utils.Common.writeCSVFile
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.storage.StorageLevel
@@ -26,36 +27,33 @@ object DataValidation extends App {
   import spark.implicits._
 
   Try {
+    val metaDataPath = args(0)
     val tablesResultBaseDir = args(1)
     val outputPath = args(2)
+    val numOfPartitions = args(3).toInt
 
-
-
-    val tableData = spark.read.csv(args(0)).as[TableData].collect().toSeq
+    val tableData = spark.read.csv(metaDataPath + "/" + "*.csv").as[TableData].collect().toSeq
     val results = tableData.map(tableData => {
       val sourceTableResultDf = spark.read.csv(tablesResultBaseDir + "/" + "table_name=" + tableData.tableName)
       val targetTableDf = spark.read.table(tableData.tableName).persist(StorageLevel.MEMORY_AND_DISK)
-      targetTableDf.createOrReplaceTempView(s"${tableData.tableName}_temp")
-      val targetTableResultDf = spark.sql(tableData.query.stripMargin.replace(tableData.tableName, tableData.tableName + "_temp"))
+      targetTableDf.createOrReplaceTempView(s"source_temp")
 
-      val sourceToTargetDifference = castToString(sourceTableResultDf).except(castToString(targetTableResultDf)).persist(StorageLevel.MEMORY_AND_DISK)
-
+      val targetTableResultDf = spark.sql(tableData.query.stripMargin.replace(tableData.tableName, "source" + "_temp"))
+      val sourceToTargetDifference = castToString(sourceTableResultDf).except(castToString(targetTableResultDf))
+      val orderedSourceToTargetDifference = sourceToTargetDifference.orderBy(sourceToTargetDifference.columns.map(col):_*)
       val targetTableCount = targetTableDf.count()
+
       val schemaMatches = if(tableData.schema.equalsIgnoreCase(targetTableDf.schema.simpleString)) "MATCHED" else "NOT MATCHED"
       val countMatches = if (tableData.count == targetTableDf.count()) "MATCHED" else "NOT MATCHED"
       val dataMatches = if (sourceToTargetDifference.take(1).isEmpty) "MATCHED" else "NOT MATCHED"
-      val differencePath = if (dataMatches == "MATCHED") "" else outputPath
-      Map(sourceToTargetDifference.withColumn("table_name", lit(tableData.tableName)) ->
-        TableResult(tableData.tableName, tableData.count, targetTableCount, countMatches, dataMatches,
-        differencePath + "/table_name=" + tableData.tableName, schemaMatches))
+      val outputResultPath = outputPath + "/" + tableData.tableName
 
-    }).reduceLeft(_ ++ _)
-    val resultsDf = results.values.toSeq.toDS()
-    resultsDf.write.option("header", "true").mode("overwrite").csv(outputPath + "/" + "comparison_results")
-
-   results.keys.foreach(df =>
-       df.orderBy(df.columns.map(col):_*).coalesce(1)
-         .write.partitionBy("table_name").option("header", "true").mode("overwrite").csv(outputPath))
+      writeCSVFile(orderedSourceToTargetDifference, outputResultPath)
+      targetTableDf.unpersist()
+      TableResult(tableData.tableName, tableData.count, targetTableCount, countMatches, dataMatches, schemaMatches,
+          outputResultPath)
+    })
+    writeCSVFile(results.toDF(), outputPath + "/" + "comparison_report")
   } match {
     case Success(_) =>
       logger.info("Data Validation Application Execution Successful")
