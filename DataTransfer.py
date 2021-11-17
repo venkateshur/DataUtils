@@ -1,15 +1,16 @@
-import boto3
-import logging
-from botocore.exceptions import ClientError
+import configparser
 import os
-
-from pyspark.sql import SparkSession
-from pyspark.sql import Row
-from datetime import datetime
-
 import subprocess
 import sys
-import configparser
+from datetime import datetime
+from functools import reduce
+
+import boto3
+from botocore.exceptions import ClientError
+from pyspark.sql import Row
+from pyspark.sql import SparkSession
+
+from pyspark.sql.functions import *
 
 
 class TablesConf(object):
@@ -33,7 +34,8 @@ def build_table_conf(in_tables_path):
 
 def load_app_config(conf_path, env):
     conf = configparser.ConfigParser()
-    return conf.read(conf_path)[env]
+    conf.read(conf_path)[env]
+    return conf
 
 
 def read_table(spark, table_name):
@@ -41,7 +43,7 @@ def read_table(spark, table_name):
 
 
 def write_csv(out_df, output_path, header="true", mode="overwrite"):
-    out_df.write().mode(mode).option("header", header).save(output_path)
+    out_df.write().mode(mode).option("header", header).format("csv").save(output_path)
 
 
 def upload_file(s3_client, file_name, s3_bucket, object_name=None):
@@ -92,12 +94,20 @@ aws_s3_path = prefix + "/processed_date=" + today_date
 
 client = boto3.client('s3', aws_access_key_id=config["AWS_ACCESS_KEY"], aws_secret_access_key=config["AWS_SECRET_KEY"])
 
+
+def build_header_dataframe(schema, header_columns):
+    emptyRDD = spark.sparkContext.emptyRDD()
+    df = spark.createDataFrame(emptyRDD, schema)
+
+    for col_name in header_columns:
+        df = df.withColumn(col_name, lit(col_name))
+    df = df.select(*header_columns)                                                         
+    return df
+
+
 for table_conf in tables_conf:
     df = read_table(table_conf.table_name)
-    columns = df.columns
-    rdd = spark.sparkContext.parallelize(columns)
-    row_rdd = rdd.map(lambda x: Row(x))
-    header_df = spark.createDataFrame(row_rdd, columns)
+    header_df = build_header_dataframe(df.schema, df.columns)
     # Write header first as record
     write_csv(header_df, base_path + "/" + table_conf.table_name, header="false", mode="overwrite")
     # Write detail records without header
